@@ -1,0 +1,85 @@
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --bg: #FFF8EE;
+  --bg-green: #F0F7E6;
+  --orange: #FF8C42;
+  --blue: #A8D8EA;
+  --green: #7BC67E;
+  --lavender: #C9B8E8;
+  --brown: #3D2B1F;
+  --brown-light: #6B4C3B;
+  --cream: #FFF8EE;
+  --font-jp: 'Noto Sans JP', sans-serif;
+  --font-rounded: 'M PLUS Rounded 1c', sans-serif;
+  --font-num: 'Nunito', sans-serif;
+}
+
+html, body {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--font-jp);
+  background: var(--bg);
+  color: var(--brown);
+  -webkit-font-smoothing: antialiased;
+  touch-action: manipulation;
+  user-select: none;
+}
+
+#root {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  font-family: inherit;
+  touch-action: manipulation;
+  min-height: 48px;
+  min-width: 48px;
+}
+
+@keyframes bounce {
+  0%, 100% { transform: translateY(0); }
+  30% { transform: translateY(-14px); }
+  60% { transform: translateY(-6px); }
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-8px); }
+  40% { transform: translateX(8px); }
+  60% { transform: translateX(-6px); }
+  80% { transform: translateX(6px); }
+}
+
+@keyframes pop {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.15); }
+  100% { transform: scale(1); }
+}
+
+@keyframes starSpin {
+  0% { transform: rotate(0deg) scale(0); opacity: 0; }
+  60% { transform: rotate(20deg) scale(1.2); opacity: 1; }
+  100% { transform: rotate(0deg) scale(1); opacity: 1; }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.bounce-anim { animation: bounce 0.5s ease; }
+.shake-anim { animation: shake 0.4s ease; }
+.pop-anim { animation: pop 0.3s ease; }
+.fade-in { animation: fadeIn 0.4s ease forwards; }
