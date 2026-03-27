@@ -6,17 +6,17 @@
 
 :root {
   --bg: #FFF8EE;
-  --bg-green: #F0F7E6;
+  --bg-alt: #F0F7E6;
   --orange: #FF8C42;
   --blue: #A8D8EA;
   --green: #7BC67E;
   --lavender: #C9B8E8;
   --brown: #3D2B1F;
-  --brown-light: #6B4C3B;
+  --brown-light: #6D4C41;
   --cream: #FFF8EE;
   --font-jp: 'Noto Sans JP', sans-serif;
-  --font-rounded: 'M PLUS Rounded 1c', sans-serif;
-  --font-num: 'Nunito', sans-serif;
+  --font-rounded: 'Fraunces', serif;
+  --font-num: 'DM Sans', sans-serif;
 }
 
 html, body {
