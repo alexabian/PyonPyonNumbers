@@ -5,8 +5,8 @@
 
 ## How to use this document
 
-Paste this alongside CLAUDE.md and DESIGN_SYSTEM.md in your Claude Code
-session. This describes one new module only. Do not change any existing
+Use this alongside DESIGN_SYSTEM.md as a module-specific implementation
+brief. This describes one new module only. Do not change any existing
 modules, game logic, or visual design. Add Module 7 to the home screen
 grid and wire it into the existing unlock and star system.
 
