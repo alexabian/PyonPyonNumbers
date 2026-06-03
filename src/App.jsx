@@ -92,6 +92,11 @@ function freshProgress(profile) {
       perfectSessions: 0,
       bestStreak: 0,
     },
+    daily: {
+      lastCompletedDate: null,
+      streak: 0,
+      bonusClaimedDate: null,
+    },
   }
 }
 
@@ -106,6 +111,10 @@ function normalizeProgress(profile, raw) {
     stats: {
       ...fresh.stats,
       ...(raw?.stats || {}),
+    },
+    daily: {
+      ...fresh.daily,
+      ...(raw?.daily || {}),
     },
   }
 
@@ -203,6 +212,16 @@ function buildMixedSessionForProfile(profile, m7Stars = {}) {
       ...q,
       sourceLabel: q.sourceLabel || moduleMap[q.sourceModuleId]?.en || 'Mixed Practice',
     }))
+}
+
+function getTodayKey() {
+  return new Date().toISOString().slice(0, 10)
+}
+
+function getYesterdayKey(dateKey) {
+  const d = new Date(`${dateKey}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() - 1)
+  return d.toISOString().slice(0, 10)
 }
 
 // ─── Background ──────────────────────────────────────────────────────────────
@@ -897,6 +916,7 @@ function CompletionScreen({ moduleId, summary, profile, onHome, onRetry, onProfi
   const carrotsEarned = summary?.carrotsEarned ?? 0
   const bestStreak = summary?.bestStreak ?? 0
   const completedQuests = summary?.quests?.filter(quest => quest.done) || []
+  const dailyBonusAwarded = !!summary?.dailyBonusAwarded
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', textAlign: 'center', padding: 24, position: 'relative', zIndex: 1 }}>
       <div className="bounce-anim" style={{ fontSize: 80, marginBottom: 8 }}>{profile.mascot}</div>
@@ -912,6 +932,11 @@ function CompletionScreen({ moduleId, summary, profile, onHome, onRetry, onProfi
           🔥 best streak {bestStreak}
         </div>
       </div>
+      {dailyBonusAwarded && (
+        <div style={{ background: '#e9ffe8', border: '2px solid #7BC67E', borderRadius: 16, padding: '10px 14px', fontSize: 13, fontFamily: 'var(--font-num)', fontWeight: 800, color: '#2f6d37', marginBottom: 14 }}>
+          📅 Daily bonus claimed! +8 🥕
+        </div>
+      )}
       {completedQuests.length > 0 && (
         <div style={{ width: '100%', maxWidth: 320, display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 24 }}>
           {completedQuests.map(quest => (
@@ -1096,9 +1121,11 @@ function ParentPanel({ progress, profile, onRestore, onReset, onClose }) {
 }
 
 // ─── Home screen ──────────────────────────────────────────────────────────────
-function HomeScreen({ profile, progress, m7Stars, onPlay, onPlayMix, onParent, onSwitchProfile }) {
+function HomeScreen({ profile, progress, m7Stars, onPlay, onPlayMix, onPlayDaily, onParent, onSwitchProfile }) {
   const m7Total = (m7Stars[1] || 0) + (m7Stars[2] || 0) + (m7Stars[3] || 0)
   const badgeLabel = getBadgeLabel(progress.carrots)
+  const todayKey = getTodayKey()
+  const dailyDone = progress.daily?.lastCompletedDate === todayKey
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative', zIndex: 1, overflowY: 'auto' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 16px 0', zIndex: 10 }}>
@@ -1141,8 +1168,29 @@ function HomeScreen({ profile, progress, m7Stars, onPlay, onPlayMix, onParent, o
         <div style={{ background: 'var(--bg)', border: '2px solid var(--lavender)', borderRadius: 999, padding: '8px 14px', fontFamily: 'var(--font-num)', fontWeight: 800, color: 'var(--brown)' }}>
           🏅 {badgeLabel}
         </div>
+        <div style={{ background: dailyDone ? '#e9ffe8' : 'var(--bg)', border: `2px solid ${dailyDone ? '#7BC67E' : 'var(--lavender)'}`, borderRadius: 999, padding: '8px 14px', fontFamily: 'var(--font-num)', fontWeight: 800, color: 'var(--brown)' }}>
+          📅 daily streak {progress.daily?.streak || 0}
+        </div>
       </div>
-      <div style={{ maxWidth: 520, margin: '0 auto', width: '100%', padding: '0 20px 16px' }}>
+      <div style={{ maxWidth: 520, margin: '0 auto', width: '100%', padding: '0 20px 12px', display: 'grid', gap: 12 }}>
+        <button onClick={onPlayDaily} style={{
+          width: '100%',
+          background: dailyDone ? 'linear-gradient(135deg, #e9ffe8, #fff7d6)' : 'linear-gradient(135deg, #dff5ff, #fff1fb)',
+          border: `3px solid ${dailyDone ? '#7BC67E' : '#7bb7ff'}`,
+          borderRadius: 24,
+          padding: '18px 18px',
+          boxShadow: dailyDone ? '0 6px 0 rgba(123,198,126,0.22)' : '0 6px 0 rgba(123,183,255,0.22)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 14,
+        }}>
+          <div style={{ textAlign: 'left' }}>
+            <div style={{ fontFamily: 'var(--font-num)', fontWeight: 900, fontSize: 20, color: 'var(--brown)' }}>📅 Daily Hop</div>
+            <div style={{ fontSize: 13, color: '#63789d', marginTop: 4 }}>{dailyDone ? 'Today\'s bonus claimed — replay for practice.' : 'One bonus run per day, with streak rewards.'}</div>
+          </div>
+          <div style={{ fontSize: 30 }}>{dailyDone ? '✅' : '🎁'}</div>
+        </button>
         <button onClick={onPlayMix} style={{
           width: '100%',
           background: 'linear-gradient(135deg, #fff7d6, #ffe4fa)',
@@ -1342,18 +1390,32 @@ export default function App() {
   }
 
   function applySessionRewards(summary, starsToStore = null) {
-    setSessionWrong(summary.wrongTaps)
-    setSessionSummary(summary)
+    const todayKey = getTodayKey()
+    const needsDailyBonus = activeModule === 'daily' && progress?.daily?.bonusClaimedDate !== todayKey
+    const enhancedSummary = {
+      ...summary,
+      carrotsEarned: (summary.carrotsEarned || 0) + (needsDailyBonus ? 8 : 0),
+      dailyBonusAwarded: needsDailyBonus,
+    }
+    setSessionWrong(enhancedSummary.wrongTaps)
+    setSessionSummary(enhancedSummary)
     setProgress(prev => {
       const next = normalizeProgress(profile, prev)
       if (starsToStore !== null && typeof activeModule === 'number' && activeModule !== 7) {
         const prevStars = next.stars[activeModule] || 0
         next.stars[activeModule] = Math.max(prevStars, starsToStore)
       }
-      next.carrots += summary.carrotsEarned || 0
+      next.carrots += enhancedSummary.carrotsEarned || 0
+      if (activeModule === 'daily' && next.daily.bonusClaimedDate !== todayKey) {
+        next.daily.bonusClaimedDate = todayKey
+        next.daily.streak = next.daily.lastCompletedDate === getYesterdayKey(todayKey)
+          ? (next.daily.streak || 0) + 1
+          : 1
+        next.daily.lastCompletedDate = todayKey
+      }
       next.stats.sessionsCompleted += 1
-      if ((summary.wrongTaps || 0) === 0) next.stats.perfectSessions += 1
-      next.stats.bestStreak = Math.max(next.stats.bestStreak || 0, summary.bestStreak || 0)
+      if ((enhancedSummary.wrongTaps || 0) === 0) next.stats.perfectSessions += 1
+      next.stats.bestStreak = Math.max(next.stats.bestStreak || 0, enhancedSummary.bestStreak || 0)
       saveProgress(profile, next)
       return next
     })
@@ -1391,6 +1453,15 @@ export default function App() {
     setScreen('game')
   }
 
+  function handlePlayDaily() {
+    setActiveModule('daily')
+    setCustomSessionTitle('Daily Hop')
+    setCustomSessionQuestions(buildMixedSessionForProfile(profile, m7Stars))
+    setSessionSummary(null)
+    setSessionWrong(0)
+    setScreen('game')
+  }
+
   function handleM7Play(level) {
     setActiveModule(7)
     setActiveM7Level(level)
@@ -1402,7 +1473,7 @@ export default function App() {
   }
 
   function handleComplete(summary) {
-    if (activeModule === 'mix') {
+    if (activeModule === 'mix' || activeModule === 'daily') {
       applySessionRewards(summary)
       return
     }
@@ -1423,7 +1494,7 @@ export default function App() {
   function handleRetry() {
     setSessionWrong(0)
     setSessionSummary(null)
-    if (activeModule === 'mix') {
+    if (activeModule === 'mix' || activeModule === 'daily') {
       setCustomSessionQuestions(buildMixedSessionForProfile(profile, m7Stars))
     }
     setScreen('game')
@@ -1494,6 +1565,7 @@ export default function App() {
             m7Stars={m7Stars}
             onPlay={handlePlay}
             onPlayMix={handlePlayMix}
+            onPlayDaily={handlePlayDaily}
             onParent={() => setShowParent(true)}
             onSwitchProfile={() => setProfile(null)}
           />
