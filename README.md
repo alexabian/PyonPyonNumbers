@@ -28,8 +28,8 @@ node node_modules/vite/bin/vite.js build
 ## Repository structure
 
 - `src/` — app source
-- `docs/DESIGN_SYSTEM.md` — visual rules and shared UI guidance
-- `docs/Module7_NumberLine_Briefing.md` — module-specific implementation brief
+- `docs/design/design-system.md` — visual rules and shared UI guidance
+- `docs/modules/module-7-number-line.md` — module-specific implementation brief
 
 ## Notes
 

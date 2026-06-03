@@ -5,10 +5,10 @@
 
 ## How to use this document
 
-Use this alongside DESIGN_SYSTEM.md as a module-specific implementation
-brief. This describes one new module only. Do not change any existing
-modules, game logic, or visual design. Add Module 7 to the home screen
-grid and wire it into the existing unlock and star system.
+Use this alongside `../design/design-system.md` as a module-specific
+implementation brief. This describes one new module only. Do not change
+any existing modules, game logic, or visual design. Add Module 7 to the
+home screen grid and wire it into the existing unlock and star system.
 
 ---
 
@@ -178,7 +178,7 @@ After 10 questions per level session:
 - 3 or more mistakes: 1 star
 
 Show the rabbit celebrating on the completion screen.
-Use the shared Confetti component from DESIGN_SYSTEM.md on 3 stars only.
+Use the shared Confetti component from `../design/design-system.md` on 3 stars only.
 
 ---
 
