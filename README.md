@@ -25,6 +25,12 @@ Build for production:
 node node_modules/vite/bin/vite.js build
 ```
 
+## Repository structure
+
+- `src/` — app source
+- `docs/DESIGN_SYSTEM.md` — visual rules and shared UI guidance
+- `docs/Module7_NumberLine_Briefing.md` — module-specific implementation brief
+
 ## Notes
 
 - This project deploys to Vercel.
