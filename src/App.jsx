@@ -1,5 +1,5 @@
 import { useState, useRef, createContext, useContext } from 'react'
-import { buildSession, buildNereSession, buildM7Session } from './questionData.js'
+import { buildSession, buildNereSession, buildM7Session, shuffle } from './questionData.js'
 import ShapeSVG from './ShapeSVG.jsx'
 
 // ─── Theme context (used by shape renderers to get primary color) ─────────────
@@ -83,19 +83,45 @@ function freshProgress(profile) {
   } else {
     unlocked[1] = true
   }
-  return { stars: {}, unlocked }
+  return {
+    stars: {},
+    unlocked,
+    carrots: 0,
+    stats: {
+      sessionsCompleted: 0,
+      perfectSessions: 0,
+      bestStreak: 0,
+    },
+  }
+}
+
+function normalizeProgress(profile, raw) {
+  const fresh = freshProgress(profile)
+  const normalized = {
+    ...fresh,
+    ...raw,
+    stars: { ...fresh.stars, ...(raw?.stars || {}) },
+    unlocked: { ...fresh.unlocked, ...(raw?.unlocked || {}) },
+    carrots: Number.isFinite(raw?.carrots) ? raw.carrots : 0,
+    stats: {
+      ...fresh.stats,
+      ...(raw?.stats || {}),
+    },
+  }
+
+  if (profile.allUnlocked) {
+    profile.modules.forEach(m => { normalized.unlocked[m.id] = true })
+  }
+
+  return normalized
 }
 
 function loadProgress(profile) {
   try {
     const raw = localStorage.getItem(profile.storageKey)
     if (raw) {
-      const p = JSON.parse(raw)
-      // Ensure all modules are unlocked (allUnlocked mode)
-      if (profile.allUnlocked) {
-        profile.modules.forEach(m => { p.unlocked[m.id] = true })
-        saveProgress(profile, p)
-      }
+      const p = normalizeProgress(profile, JSON.parse(raw))
+      saveProgress(profile, p)
       return p
     }
   } catch (_) {}
@@ -113,6 +139,70 @@ function themeVars(t) {
     '--orange': t.primary, '--blue': t.secondary, '--lavender': t.lavender,
     '--brown': t.brown, '--brown-light': t.brownLight, '--cream': t.bg,
   }
+}
+
+function getBadgeLabel(carrots = 0) {
+  if (carrots >= 160) return 'Rainbow Hopper'
+  if (carrots >= 90) return 'Super Rabbit'
+  if (carrots >= 40) return 'Star Finder'
+  if (carrots >= 15) return 'Curious Bunny'
+  return 'Little Hopper'
+}
+
+function createSessionQuests(profile, questionsLength) {
+  const gentleGoal = profile.id === 'nerea' ? 3 : 2
+  return [
+    { id: 'finish', label: 'Finish the lesson', progress: 0, goal: 1, reward: 4, done: false },
+    { id: 'streak3', label: 'Make a 3-answer streak', progress: 0, goal: 3, reward: 3, done: false },
+    { id: 'steady', label: `Keep oops to ${gentleGoal} or less`, progress: gentleGoal, goal: gentleGoal, reward: 4, done: false },
+    { id: 'sparkle', label: `Get ${questionsLength} carrots`, progress: 0, goal: questionsLength, reward: 2, done: false },
+  ]
+}
+
+function updateQuestProgress(quests, snapshot) {
+  return quests.map(quest => {
+    let progress = quest.progress
+    if (quest.id === 'finish') progress = snapshot.finished ? 1 : 0
+    if (quest.id === 'streak3') progress = Math.min(quest.goal, snapshot.bestStreak)
+    if (quest.id === 'steady') progress = Math.max(0, quest.goal - snapshot.wrongTaps)
+    if (quest.id === 'sparkle') progress = Math.min(quest.goal, snapshot.sessionCarrots)
+    return {
+      ...quest,
+      progress,
+      done: progress >= quest.goal,
+    }
+  })
+}
+
+function buildMixedSessionForProfile(profile, m7Stars = {}) {
+  const moduleMap = Object.fromEntries(profile.modules.map(mod => [mod.id, mod]))
+  const highestM7Level = (m7Stars[3] || 0) >= 2 ? 3 : (m7Stars[2] || 0) >= 2 ? 2 : 1
+  const deck = []
+
+  profile.modules.forEach(info => {
+    if (info.id === 7) {
+      const count = highestM7Level >= 2 ? 2 : 1
+      deck.push(
+        ...buildM7Session(highestM7Level)
+          .slice(0, count)
+          .map(q => ({ ...q, sourceModuleId: 7, sourceLabel: `Number Line · Level ${highestM7Level}` })),
+      )
+      return
+    }
+
+    deck.push(
+      ...profile.buildSession(info.id)
+        .slice(0, 2)
+        .map(q => ({ ...q, sourceModuleId: info.id, sourceLabel: info.en })),
+    )
+  })
+
+  return shuffle(deck)
+    .slice(0, 10)
+    .map(q => ({
+      ...q,
+      sourceLabel: q.sourceLabel || moduleMap[q.sourceModuleId]?.en || 'Mixed Practice',
+    }))
 }
 
 // ─── Background ──────────────────────────────────────────────────────────────
@@ -648,38 +738,82 @@ function QuestionView({ q, onAnswer, answerState }) {
 }
 
 // ─── Game screen ──────────────────────────────────────────────────────────────
-function GameScreen({ moduleId, profile, onComplete, onBack, m7Level }) {
+function GameScreen({ moduleId, profile, onComplete, onBack, m7Level, customQuestions, customTitle }) {
   const [questions] = useState(() =>
-    moduleId === 7 && m7Level ? buildM7Session(m7Level) : profile.buildSession(moduleId)
+    customQuestions || (moduleId === 7 && m7Level ? buildM7Session(m7Level) : profile.buildSession(moduleId))
   )
   const [qIndex, setQIndex] = useState(0)
   const [answerState, setAnswerState] = useState({})
   const [wrongTaps, setWrongTaps] = useState(0)
   const [mood, setMood] = useState('neutral')
   const [feedback, setFeedback] = useState(null)
+  const [currentStreak, setCurrentStreak] = useState(0)
+  const [bestStreak, setBestStreak] = useState(0)
+  const [sessionCarrots, setSessionCarrots] = useState(0)
+  const [quests, setQuests] = useState(() => createSessionQuests(profile, questions.length))
   const advancing = useRef(false)
 
   const q = questions[qIndex]
   const info = profile.modules.find(m => m.id === moduleId)
+  const heading = customTitle || info?.title
+  const subheading = customQuestions ? q?.sourceLabel : info?.en
+
+  function syncQuests(snapshot) {
+    setQuests(prev => updateQuestProgress(prev, snapshot))
+  }
 
   function handleAnswer(value) {
     if (advancing.current) return
     if (value === q.correct) {
+      const nextWrongTaps = wrongTaps
+      const nextStreak = currentStreak + 1
+      const nextBestStreak = Math.max(bestStreak, nextStreak)
+      const nextSessionCarrots = sessionCarrots + 1
+      const finished = qIndex + 1 >= questions.length
+      const nextQuests = updateQuestProgress(quests, {
+        finished,
+        bestStreak: nextBestStreak,
+        wrongTaps: nextWrongTaps,
+        sessionCarrots: nextSessionCarrots,
+      })
+
       advancing.current = true
       setAnswerState({ [value]: 'correct' })
       setMood('happy')
       setFeedback('correct')
+      setCurrentStreak(nextStreak)
+      setBestStreak(nextBestStreak)
+      setSessionCarrots(nextSessionCarrots)
+      setQuests(nextQuests)
+
       setTimeout(() => {
         advancing.current = false
         setAnswerState({})
         setMood('neutral')
         setFeedback(null)
-        if (qIndex + 1 >= questions.length) onComplete(wrongTaps)
-        else setQIndex(i => i + 1)
+        if (finished) {
+          const questBonus = nextQuests.filter(quest => quest.done).reduce((sum, quest) => sum + quest.reward, 0)
+          onComplete({
+            wrongTaps: nextWrongTaps,
+            bestStreak: nextBestStreak,
+            carrotsEarned: nextSessionCarrots + questBonus,
+            quests: nextQuests,
+          })
+        } else {
+          setQIndex(i => i + 1)
+        }
       }, 1000)
     } else {
-      setWrongTaps(w => w + 1)
+      const nextWrongTaps = wrongTaps + 1
+      setWrongTaps(nextWrongTaps)
+      setCurrentStreak(0)
       setMood('sad')
+      syncQuests({
+        finished: false,
+        bestStreak,
+        wrongTaps: nextWrongTaps,
+        sessionCarrots,
+      })
       setAnswerState(prev => ({ ...prev, [value]: 'wrong' }))
       setTimeout(() => {
         setMood('neutral')
@@ -704,13 +838,45 @@ function GameScreen({ moduleId, profile, onComplete, onBack, m7Level }) {
         </span>
       </div>
       <div style={{ textAlign: 'center', paddingBottom: 8 }}>
-        <span style={{ fontSize: 14, fontFamily: 'var(--font-jp)', color: '#888' }}>{info?.title}</span>
+        <span style={{ fontSize: 14, fontFamily: 'var(--font-jp)', color: '#888' }}>{heading}</span>
+        {subheading && (
+          <div style={{ fontSize: 12, fontFamily: 'var(--font-num)', color: '#9b8fb6', marginTop: 4 }}>
+            {subheading}
+          </div>
+        )}
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'center', gap: 8, flexWrap: 'wrap', padding: '0 16px 12px' }}>
+        <div style={{ background: 'var(--bg)', border: '2px solid var(--lavender)', borderRadius: 999, padding: '6px 12px', fontSize: 13, fontFamily: 'var(--font-num)', fontWeight: 700, color: 'var(--brown)' }}>
+          🥕 {sessionCarrots}
+        </div>
+        <div style={{ background: 'var(--bg)', border: '2px solid var(--lavender)', borderRadius: 999, padding: '6px 12px', fontSize: 13, fontFamily: 'var(--font-num)', fontWeight: 700, color: 'var(--brown)' }}>
+          🔥 {currentStreak} / best {bestStreak}
+        </div>
+        <div style={{ background: 'var(--bg)', border: '2px solid var(--lavender)', borderRadius: 999, padding: '6px 12px', fontSize: 13, fontFamily: 'var(--font-num)', fontWeight: 700, color: 'var(--brown)' }}>
+          ✨ {quests.filter(quest => quest.done).length}/{quests.length} quests
+        </div>
+      </div>
+      <div style={{ display: 'flex', gap: 8, overflowX: 'auto', padding: '0 16px 12px' }}>
+        {quests.map(quest => (
+          <div key={quest.id} style={{
+            minWidth: 132,
+            background: quest.done ? 'linear-gradient(135deg, #fff7d6, #ffe7a8)' : 'rgba(255,255,255,0.75)',
+            border: `2px solid ${quest.done ? '#F5B041' : 'var(--lavender)'}`,
+            borderRadius: 16,
+            padding: '10px 12px',
+            boxShadow: quest.done ? '0 4px 10px rgba(245,176,65,0.2)' : 'none',
+          }}>
+            <div style={{ fontSize: 12, fontFamily: 'var(--font-num)', fontWeight: 800, color: 'var(--brown)', marginBottom: 4 }}>{quest.label}</div>
+            <div style={{ fontSize: 11, color: '#7a6d90' }}>{Math.min(quest.progress, quest.goal)} / {quest.goal}</div>
+            <div style={{ fontSize: 11, color: '#c67c00', marginTop: 4 }}>+{quest.reward} 🥕</div>
+          </div>
+        ))}
       </div>
       <div style={{ textAlign: 'center', padding: '8px 0', minHeight: 90 }}>
         <Mascot emoji={profile.mascot} mood={mood} />
         {feedback === 'correct' && (
           <div className="pop-anim" style={{ display: 'inline-block', marginLeft: 12, fontSize: 20, fontFamily: 'var(--font-jp)', fontWeight: 900, color: '#4a9e52' }}>
-            せいかい！✨
+            せいかい！✨ +1 🥕
           </div>
         )}
       </div>
@@ -724,16 +890,38 @@ function GameScreen({ moduleId, profile, onComplete, onBack, m7Level }) {
 }
 
 // ─── Completion screen ────────────────────────────────────────────────────────
-function CompletionScreen({ moduleId, wrongTaps, profile, onHome, onRetry, onProfiles }) {
-  const stars = profile.getStars(wrongTaps)
+function CompletionScreen({ moduleId, summary, profile, onHome, onRetry, onProfiles, titleOverride }) {
+  const wrongTaps = summary?.wrongTaps ?? 0
+  const stars = moduleId === 7 ? (wrongTaps === 0 ? 3 : wrongTaps <= 2 ? 2 : 1) : profile.getStars(wrongTaps)
   const info = profile.modules.find(m => m.id === moduleId)
+  const carrotsEarned = summary?.carrotsEarned ?? 0
+  const bestStreak = summary?.bestStreak ?? 0
+  const completedQuests = summary?.quests?.filter(quest => quest.done) || []
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', textAlign: 'center', padding: 24, position: 'relative', zIndex: 1 }}>
       <div className="bounce-anim" style={{ fontSize: 80, marginBottom: 8 }}>{profile.mascot}</div>
       <div style={{ fontSize: 32, marginBottom: 4 }}>{'⭐'.repeat(stars)}</div>
       <h2 style={{ fontSize: 26, fontFamily: 'var(--font-jp)', fontWeight: 900, color: 'var(--orange)', marginBottom: 8 }}>おわった！</h2>
       <p style={{ fontSize: 16, fontFamily: 'var(--font-jp)', color: 'var(--brown)', marginBottom: 4 }}>よくできました！</p>
-      <p style={{ fontSize: 13, color: '#888', fontFamily: 'var(--font-jp)', marginBottom: 28 }}>{info?.title}</p>
+      <p style={{ fontSize: 13, color: '#888', fontFamily: 'var(--font-jp)', marginBottom: 14 }}>{titleOverride || info?.title}</p>
+      <div style={{ display: 'flex', justifyContent: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
+        <div style={{ background: '#fff7d6', border: '2px solid #F5B041', borderRadius: 999, padding: '8px 14px', fontFamily: 'var(--font-num)', fontWeight: 800, color: '#9a5a00' }}>
+          🥕 +{carrotsEarned}
+        </div>
+        <div style={{ background: 'var(--bg)', border: '2px solid var(--lavender)', borderRadius: 999, padding: '8px 14px', fontFamily: 'var(--font-num)', fontWeight: 800, color: 'var(--brown)' }}>
+          🔥 best streak {bestStreak}
+        </div>
+      </div>
+      {completedQuests.length > 0 && (
+        <div style={{ width: '100%', maxWidth: 320, display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 24 }}>
+          {completedQuests.map(quest => (
+            <div key={quest.id} style={{ background: 'rgba(255,255,255,0.8)', border: '2px solid #F5B041', borderRadius: 16, padding: '10px 14px' }}>
+              <div style={{ fontSize: 13, fontFamily: 'var(--font-num)', fontWeight: 800, color: 'var(--brown)' }}>{quest.label}</div>
+              <div style={{ fontSize: 12, color: '#c67c00', marginTop: 4 }}>Quest clear! +{quest.reward} 🥕</div>
+            </div>
+          ))}
+        </div>
+      )}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14, width: '100%', maxWidth: 280 }}>
         <button onClick={onRetry} style={{
           background: `linear-gradient(135deg, ${profile.theme.lavender}, ${profile.theme.primary})`,
@@ -810,7 +998,7 @@ function ParentPanel({ progress, profile, onRestore, onReset, onClose }) {
 
   function handleImport() {
     try {
-      const parsed = JSON.parse(atob(importVal.trim()))
+      const parsed = normalizeProgress(profile, JSON.parse(atob(importVal.trim())))
       if (!parsed.stars || !parsed.unlocked) throw new Error('bad')
       onRestore(parsed)
       setImportStatus('ok')
@@ -908,8 +1096,9 @@ function ParentPanel({ progress, profile, onRestore, onReset, onClose }) {
 }
 
 // ─── Home screen ──────────────────────────────────────────────────────────────
-function HomeScreen({ profile, progress, m7Stars, onPlay, onParent, onSwitchProfile }) {
+function HomeScreen({ profile, progress, m7Stars, onPlay, onPlayMix, onParent, onSwitchProfile }) {
   const m7Total = (m7Stars[1] || 0) + (m7Stars[2] || 0) + (m7Stars[3] || 0)
+  const badgeLabel = getBadgeLabel(progress.carrots)
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative', zIndex: 1, overflowY: 'auto' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 16px 0', zIndex: 10 }}>
@@ -941,6 +1130,37 @@ function HomeScreen({ profile, progress, m7Stars, onPlay, onParent, onSwitchProf
           Numbers
         </h2>
         <div style={{ fontSize: 44, marginTop: 6 }}>{profile.mascot}</div>
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'center', gap: 10, flexWrap: 'wrap', padding: '0 20px 14px' }}>
+        <div style={{ background: '#fff7d6', border: '2px solid #F5B041', borderRadius: 999, padding: '8px 14px', fontFamily: 'var(--font-num)', fontWeight: 800, color: '#9a5a00' }}>
+          🥕 {progress.carrots}
+        </div>
+        <div style={{ background: 'var(--bg)', border: '2px solid var(--lavender)', borderRadius: 999, padding: '8px 14px', fontFamily: 'var(--font-num)', fontWeight: 800, color: 'var(--brown)' }}>
+          🔥 best streak {progress.stats?.bestStreak || 0}
+        </div>
+        <div style={{ background: 'var(--bg)', border: '2px solid var(--lavender)', borderRadius: 999, padding: '8px 14px', fontFamily: 'var(--font-num)', fontWeight: 800, color: 'var(--brown)' }}>
+          🏅 {badgeLabel}
+        </div>
+      </div>
+      <div style={{ maxWidth: 520, margin: '0 auto', width: '100%', padding: '0 20px 16px' }}>
+        <button onClick={onPlayMix} style={{
+          width: '100%',
+          background: 'linear-gradient(135deg, #fff7d6, #ffe4fa)',
+          border: '3px solid #F5B041',
+          borderRadius: 24,
+          padding: '18px 18px',
+          boxShadow: '0 6px 0 rgba(245,176,65,0.22)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 14,
+        }}>
+          <div style={{ textAlign: 'left' }}>
+            <div style={{ fontFamily: 'var(--font-num)', fontWeight: 900, fontSize: 20, color: 'var(--brown)' }}>🎲 Lucky Mix</div>
+            <div style={{ fontSize: 13, color: '#7a6d90', marginTop: 4 }}>A surprise lesson with mixed question types.</div>
+          </div>
+          <div style={{ fontSize: 34 }}>🥕✨</div>
+        </button>
       </div>
       <div style={{
         display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)',
@@ -1107,8 +1327,11 @@ export default function App() {
   const [activeModule, setActiveModule] = useState(null)
   const [activeM7Level, setActiveM7Level] = useState(1)
   const [sessionWrong, setSessionWrong] = useState(0)
+  const [sessionSummary, setSessionSummary] = useState(null)
   const [showParent, setShowParent] = useState(false)
   const [m7Stars, setM7Stars] = useState({ 1: 0, 2: 0, 3: 0 })
+  const [customSessionQuestions, setCustomSessionQuestions] = useState(null)
+  const [customSessionTitle, setCustomSessionTitle] = useState('')
 
   function loadM7Stars() {
     return {
@@ -1118,17 +1341,52 @@ export default function App() {
     }
   }
 
+  function applySessionRewards(summary, starsToStore = null) {
+    setSessionWrong(summary.wrongTaps)
+    setSessionSummary(summary)
+    setProgress(prev => {
+      const next = normalizeProgress(profile, prev)
+      if (starsToStore !== null && typeof activeModule === 'number' && activeModule !== 7) {
+        const prevStars = next.stars[activeModule] || 0
+        next.stars[activeModule] = Math.max(prevStars, starsToStore)
+      }
+      next.carrots += summary.carrotsEarned || 0
+      next.stats.sessionsCompleted += 1
+      if ((summary.wrongTaps || 0) === 0) next.stats.perfectSessions += 1
+      next.stats.bestStreak = Math.max(next.stats.bestStreak || 0, summary.bestStreak || 0)
+      saveProgress(profile, next)
+      return next
+    })
+    setScreen('complete')
+  }
+
   function selectProfile(id) {
     const p = PROFILES[id]
     setProfile(p)
     setProgress(loadProgress(p))
     if (id === 'lidia') setM7Stars(loadM7Stars())
+    else setM7Stars({ 1: 0, 2: 0, 3: 0 })
+    setCustomSessionQuestions(null)
+    setCustomSessionTitle('')
+    setSessionSummary(null)
     setScreen('home')
   }
 
   function handlePlay(moduleId) {
     if (moduleId === 7) { setScreen('m7levels'); return }
     setActiveModule(moduleId)
+    setCustomSessionQuestions(null)
+    setCustomSessionTitle('')
+    setSessionSummary(null)
+    setSessionWrong(0)
+    setScreen('game')
+  }
+
+  function handlePlayMix() {
+    setActiveModule('mix')
+    setCustomSessionTitle('Lucky Mix')
+    setCustomSessionQuestions(buildMixedSessionForProfile(profile, m7Stars))
+    setSessionSummary(null)
     setSessionWrong(0)
     setScreen('game')
   }
@@ -1136,58 +1394,72 @@ export default function App() {
   function handleM7Play(level) {
     setActiveModule(7)
     setActiveM7Level(level)
+    setCustomSessionQuestions(null)
+    setCustomSessionTitle('')
+    setSessionSummary(null)
     setSessionWrong(0)
     setScreen('game')
   }
 
-  function handleComplete(wrongTaps) {
-    const stars = profile.getStars(wrongTaps)
-    setSessionWrong(wrongTaps)
-    setProgress(prev => {
-      const prevStars = prev.stars[activeModule] || 0
-      const newStars = Math.max(prevStars, stars)
-      const newUnlocked = { ...prev.unlocked }
-      const next = { stars: { ...prev.stars, [activeModule]: newStars }, unlocked: newUnlocked }
-      saveProgress(profile, next)
-      return next
-    })
-    setScreen('complete')
+  function handleComplete(summary) {
+    if (activeModule === 'mix') {
+      applySessionRewards(summary)
+      return
+    }
+    const stars = profile.getStars(summary.wrongTaps)
+    applySessionRewards(summary, stars)
   }
 
-  function handleCompleteM7(wrongTaps) {
-    const stars = wrongTaps === 0 ? 3 : wrongTaps <= 2 ? 2 : 1
-    setSessionWrong(wrongTaps)
+  function handleCompleteM7(summary) {
+    const stars = summary.wrongTaps === 0 ? 3 : summary.wrongTaps <= 2 ? 2 : 1
     const key = `pyonpyon_m7_l${activeM7Level}_stars`
     const prev = m7Stars[activeM7Level] || 0
     const newStars = Math.max(prev, stars)
     try { localStorage.setItem(key, String(newStars)) } catch (_) {}
     setM7Stars(s => ({ ...s, [activeM7Level]: newStars }))
-    setScreen('complete')
+    applySessionRewards(summary)
   }
 
   function handleRetry() {
     setSessionWrong(0)
+    setSessionSummary(null)
+    if (activeModule === 'mix') {
+      setCustomSessionQuestions(buildMixedSessionForProfile(profile, m7Stars))
+    }
     setScreen('game')
   }
 
   function handleHome() {
     setScreen('home')
     setActiveModule(null)
+    setCustomSessionQuestions(null)
+    setCustomSessionTitle('')
   }
 
   function handleM7Home() {
     setScreen('m7levels')
+    setCustomSessionQuestions(null)
+    setCustomSessionTitle('')
   }
 
   function handleRestore(saved) {
-    setProgress(saved)
-    saveProgress(profile, saved)
+    const normalized = normalizeProgress(profile, saved)
+    setProgress(normalized)
+    saveProgress(profile, normalized)
   }
 
   function handleReset() {
     const fresh = freshProgress(profile)
     setProgress(fresh)
     saveProgress(profile, fresh)
+    if (profile.id === 'lidia') {
+      try {
+        localStorage.removeItem('pyonpyon_m7_l1_stars')
+        localStorage.removeItem('pyonpyon_m7_l2_stars')
+        localStorage.removeItem('pyonpyon_m7_l3_stars')
+      } catch (_) {}
+      setM7Stars({ 1: 0, 2: 0, 3: 0 })
+    }
   }
 
   // Profile selection — no profile active yet
@@ -1221,6 +1493,7 @@ export default function App() {
             progress={progress}
             m7Stars={m7Stars}
             onPlay={handlePlay}
+            onPlayMix={handlePlayMix}
             onParent={() => setShowParent(true)}
             onSwitchProfile={() => setProfile(null)}
           />
@@ -1234,10 +1507,12 @@ export default function App() {
         )}
         {screen === 'game' && (
           <GameScreen
-            key={`${activeModule}-${activeM7Level}-${sessionWrong}-${Math.random()}`}
+            key={`${activeModule}-${activeM7Level}-${sessionWrong}-${customSessionQuestions?.length || 0}-${Math.random()}`}
             moduleId={activeModule}
             m7Level={activeM7Level}
             profile={profile}
+            customQuestions={customSessionQuestions}
+            customTitle={customSessionTitle}
             onComplete={activeModule === 7 ? handleCompleteM7 : handleComplete}
             onBack={activeModule === 7 ? handleM7Home : handleHome}
           />
@@ -1245,8 +1520,9 @@ export default function App() {
         {screen === 'complete' && (
           <CompletionScreen
             moduleId={activeModule}
-            wrongTaps={sessionWrong}
+            summary={sessionSummary}
             profile={profile}
+            titleOverride={customSessionTitle}
             onHome={activeModule === 7 ? handleM7Home : handleHome}
             onRetry={handleRetry}
             onProfiles={() => setProfile(null)}

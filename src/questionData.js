@@ -23,6 +23,65 @@ export function shuffle(arr) {
   return a
 }
 
+function questionKey(q) {
+  switch (q.type) {
+    case 'M1A':
+    case 'M1B':
+      return `${q.type}:${q.numeral}`
+    case 'M2':
+      return `${q.type}:${q.count}`
+    case 'M3':
+      return `${q.type}:${q.left}:${q.right}`
+    case 'M4':
+      return `${q.type}:${q.direction}:${q.gap}:${q.seq.map(v => v ?? 'x').join('-')}`
+    case 'M5':
+      return `${q.type}:${q.a}:${q.b}`
+    case 'M6A':
+    case 'M6B':
+      return `${q.type}:${q.shape.id}`
+    case 'M7A':
+      return `${q.type}:${q.position}`
+    case 'M7B':
+      return `${q.type}:${q.targetNumber}`
+    case 'M7C':
+      return `${q.type}:${q.left}:${q.right}`
+    case 'M7D':
+      return `${q.type}:${q.position}`
+    default:
+      return q.type
+  }
+}
+
+function selectVariedQuestions(pool, count, recentKeys = [], recentTypes = []) {
+  const available = shuffle(pool)
+  const picked = []
+  const localKeys = new Set(recentKeys)
+  const typeWindow = [...recentTypes]
+
+  function canUse(q, avoidType = true) {
+    const key = q.memoryKey || questionKey(q)
+    if (localKeys.has(key)) return false
+    if (!avoidType) return true
+    const recentTypeWindow = typeWindow.slice(-3)
+    return !recentTypeWindow.includes(q.type)
+  }
+
+  while (picked.length < count && available.length) {
+    let index = available.findIndex(q => canUse(q, true))
+    if (index === -1) index = available.findIndex(q => canUse(q, false))
+    if (index === -1) index = 0
+
+    const [next] = available.splice(index, 1)
+    const key = next.memoryKey || questionKey(next)
+    picked.push({ ...next, memoryKey: key })
+    localKeys.add(key)
+    typeWindow.push(next.type)
+    if (typeWindow.length > 4) typeWindow.shift()
+  }
+
+  return picked
+}
+
 function clamp(v, min, max) { return Math.max(min, Math.min(max, v)) }
 
 function distractors(correct, min, max, count = 2) {
@@ -219,8 +278,8 @@ export function generateM6Questions(stage) {
 export function buildSession(moduleId) {
   const s1 = buildPool(moduleId, 1)
   const s2 = buildPool(moduleId, 2)
-  const q1 = shuffle(s1).slice(0, 5)
-  const q2 = shuffle(s2).slice(0, 5)
+  const q1 = selectVariedQuestions(s1, 5)
+  const q2 = selectVariedQuestions(s2, 5, q1.map(q => q.memoryKey), q1.map(q => q.type))
   return [...q1, ...q2]
 }
 
@@ -422,5 +481,5 @@ export function buildM7Session(level) {
     }
   }
 
-  return shuffle(pool).slice(0, 10)
+  return selectVariedQuestions(pool, 10)
 }
