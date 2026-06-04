@@ -1011,14 +1011,46 @@ function ModuleCard({ info, stars, unlocked, onPlay }) {
 function ParentPanel({ progress, profile, onRestore, onReset, onClose }) {
   const [importVal, setImportVal] = useState('')
   const [importStatus, setImportStatus] = useState(null)
-  const [copied, setCopied] = useState(false)
+  const [copyStatus, setCopyStatus] = useState('idle')
+  const exportInputRef = useRef(null)
   const exportCode = btoa(JSON.stringify(progress))
 
-  function handleCopy() {
-    navigator.clipboard.writeText(exportCode).then(() => {
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    })
+  function flashCopyStatus(status, delay = 2000) {
+    setCopyStatus(status)
+    window.clearTimeout(flashCopyStatus.timeoutId)
+    flashCopyStatus.timeoutId = window.setTimeout(() => setCopyStatus('idle'), delay)
+  }
+
+  function fallbackCopy() {
+    const input = exportInputRef.current
+    if (!input) return false
+    input.focus()
+    input.select()
+    input.setSelectionRange(0, input.value.length)
+    try {
+      return document.execCommand('copy')
+    } catch (_) {
+      return false
+    }
+  }
+
+  async function handleCopy() {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(exportCode)
+        flashCopyStatus('copied')
+        return
+      }
+    } catch (_) {
+      // Fall back to manual selection / execCommand below.
+    }
+
+    if (fallbackCopy()) {
+      flashCopyStatus('copied')
+    } else {
+      fallbackCopy()
+      flashCopyStatus('manual', 2600)
+    }
   }
 
   function handleImport() {
@@ -1061,19 +1093,28 @@ function ParentPanel({ progress, profile, onRestore, onReset, onClose }) {
         <div>
           <p style={{ fontSize: 13, fontWeight: 700, color: 'var(--brown)', marginBottom: 8, fontFamily: 'var(--font-num)' }}>Save code (copy this)</p>
           <div style={{ display: 'flex', gap: 8 }}>
-            <input readOnly value={exportCode} onFocus={e => e.target.select()} style={{
-              flex: 1, padding: '10px 12px', borderRadius: 12,
-              border: '2px solid var(--lavender)', background: 'var(--bg-alt)',
-              fontFamily: 'monospace', fontSize: 11, color: 'var(--brown)',
-              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-            }} />
+            <input
+              ref={exportInputRef}
+              readOnly
+              value={exportCode}
+              onFocus={e => e.target.select()}
+              onClick={e => e.target.select()}
+              aria-label="Save code"
+              style={{
+                flex: 1, padding: '10px 12px', borderRadius: 12,
+                border: `2px solid ${copyStatus === 'manual' ? 'var(--orange)' : 'var(--lavender)'}`,
+                background: 'var(--bg-alt)',
+                fontFamily: 'monospace', fontSize: 11, color: 'var(--brown)',
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}
+            />
             <button onClick={handleCopy} style={{
-              background: copied ? '#7BC67E' : 'var(--orange)',
+              background: copyStatus === 'copied' ? '#7BC67E' : copyStatus === 'manual' ? '#A8D8EA' : 'var(--orange)',
               border: 'none', borderRadius: 12, padding: '10px 16px',
               color: 'white', fontFamily: 'var(--font-num)', fontWeight: 700, fontSize: 13,
               cursor: 'pointer', transition: 'background 0.2s', whiteSpace: 'nowrap',
             }}>
-              {copied ? 'Copied!' : 'Copy'}
+              {copyStatus === 'copied' ? 'Copied!' : copyStatus === 'manual' ? 'Press Ctrl+C' : 'Copy'}
             </button>
           </div>
         </div>
